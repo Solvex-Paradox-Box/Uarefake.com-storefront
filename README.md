@@ -1,4 +1,4 @@
-# Solvex Paradox Box Marketplace & B2B Solutions
+# Solvex Paradox Box Autonomous B2B Solutions
 
 Official Repository: [https://github.com/Solvex-Paradox-Box/Solvex-Paradox-Marketplace-B2B-Solutions#solvex-paradox-marketplace--b2b-solutions](https://github.com/Solvex-Paradox-Box/Solvex-Paradox-Marketplace-B2B-Solutions#solvex-paradox-marketplace--b2b-solutions)
 
