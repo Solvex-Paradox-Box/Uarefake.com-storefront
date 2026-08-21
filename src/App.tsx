@@ -50,12 +50,14 @@ import { Shield, ShoppingBag, Globe, ArrowRight, Brain, Server, CheckCircle2, Lo
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { CartProvider, useCart } from './context/CartContext';
 import { UserAuthModal } from './components/UserAuthModal';
+import { UserProfileModal } from './components/UserProfileModal';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
 
 function StorefrontApp({ forcedDomainMode }: { forcedDomainMode?: DomainMode }) {
   const { authModalOpen, authModalMode, closeAuthModal } = useAuth();
   const { isCartOpen, isCheckoutOpen, openCheckout, closeCheckout } = useCart();
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   // Domain mode: .com (User Storefront) vs .space (Admin Control Plane)
   const [domainMode, setDomainMode] = useState<DomainMode>(() => {
     if (forcedDomainMode) return forcedDomainMode;
@@ -412,6 +414,7 @@ function StorefrontApp({ forcedDomainMode }: { forcedDomainMode?: DomainMode }) 
         nodesCount={companyNodes.length}
         isMasterAdmin={isMasterAdmin}
         onOpenAuthModal={() => setMasterAuthModalOpen(true)}
+        onOpenProfileModal={() => setIsProfileOpen(true)}
         onLockAdmin={handleLockMaster}
       />
 
@@ -736,6 +739,38 @@ function StorefrontApp({ forcedDomainMode }: { forcedDomainMode?: DomainMode }) 
             message: msg,
             type: 'success'
           });
+        }}
+        onAdminDirectLogin={() => {
+          setDomainMode('space');
+          setActiveTab('brain');
+          setIsMasterAdmin(true);
+          addToast({
+            title: 'Sovereign Administrator Granted',
+            message: 'Directly authenticated to uarefake.space AI Registry & Control Board backend.',
+            type: 'success'
+          });
+        }}
+      />
+
+      {/* User Profile & Purchased Solutions Hub Modal */}
+      <UserProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        onNavigateToSpaceAdmin={() => {
+          setIsProfileOpen(false);
+          setDomainMode('space');
+          setActiveTab('brain');
+          setIsMasterAdmin(true);
+          addToast({
+            title: 'Transitioned to Admin Enclave',
+            message: 'Connected to uarefake.space AI Registry and Control Board.',
+            type: 'success'
+          });
+        }}
+        onNavigateToCatalog={() => {
+          setIsProfileOpen(false);
+          setDomainMode('com');
+          setActiveTab('paradox-vault');
         }}
       />
 

@@ -207,6 +207,39 @@ ${placedReceipt.merkleProofHash}
 
       setPlacedReceipt(data.receipt);
       onOrderPlaced(data.purchaseOrder, data.receipt);
+
+      // Append newly purchased solutions to user's localStorage solution list
+      try {
+        const userKey = user?.id || (customer.email ? customer.email.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'guest');
+        const purchasesKey = `solvex_user_purchases_${userKey}`;
+        const existingRaw = localStorage.getItem(purchasesKey);
+        const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+        
+        const newPurchasedItems = (items || []).map((itm: any) => {
+          const matchKey = data.receipt?.licenseKeys?.find((k: any) => k.solutionId === itm.id || k.solutionId === itm.solutionId);
+          return {
+            id: `purch-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            lotId: itm.solutionId || itm.id || 'LOT-01',
+            title: itm.title || 'Sovereign Business Solution',
+            category: itm.category || 'Autonomous Framework',
+            purchasedAt: data.receipt?.timestamp || new Date().toISOString(),
+            price: Number(itm.price) || 0,
+            currency: 'USD',
+            licenseKey: matchKey?.key || `SLVX-KEY-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+            licenseTier: deployment?.licenseTier || 'Enterprise Multi-Node',
+            merkleProof: data.receipt?.merkleProofHash || '0x22a0918cf1b98402938472910ba12091de47bb3109a87cd98f73b198c21a44e9',
+            status: 'ACTIVE',
+            capabilities: itm.features || ['EAL6+ Security Enclave', 'Deterministic Execution', 'Sub-millisecond Latency'],
+            runtimeTarget: deployment?.cloudProvider || 'Node.js 20 ESM / Rust Microservice'
+          };
+        });
+
+        const merged = [...newPurchasedItems, ...(Array.isArray(existingList) ? existingList : [])];
+        localStorage.setItem(purchasesKey, JSON.stringify(merged));
+      } catch (storageErr) {
+        console.warn('Could not update purchases in localStorage:', storageErr);
+      }
+
       clearCart();
       setStep('success');
     } catch (err: any) {

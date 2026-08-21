@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, User, Building, Mail, Phone, MapPin, Shield, Key, Download, ExternalLink, 
   Copy, CheckCircle2, Terminal, Server, Cpu, Clock, RefreshCw, LogOut, Lock,
-  ChevronRight, Sparkles, FileCode, Check, AlertCircle, ShoppingBag, Eye
+  ChevronRight, Sparkles, FileCode, Check, AlertCircle, ShoppingBag, Eye,
+  Camera, CameraOff, RotateCcw, Trash2, Upload, Video, CheckCheck, Aperture,
+  HardDrive
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PurchasedSolutionItem, UserAccount } from '../types/index';
+import { useUserProfileSync } from '../hooks/useUserProfileSync';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -24,7 +27,28 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 }) => {
   const { user, token, logout, updateProfile } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'solutions' | 'orders' | 'admin-gateway'>('solutions');
+  // Integrated LocalStorage & Backend Profile State Hook
+  const {
+    avatarUrl,
+    setAvatarUrl,
+    purchasedSolutions,
+    setPurchasedSolutions,
+    persistAvatar,
+    removeAvatar,
+    persistPurchasedSolutions,
+    syncWithServer,
+    saveCompleteProfile,
+    isSyncing,
+    lastSyncedAt,
+    hasLocalAvatar,
+    localPurchasesCount
+  } = useUserProfileSync({
+    user,
+    token,
+    updateProfile
+  });
+
+  const [activeTab, setActiveTab] = useState<'profile' | 'solutions' | 'orders' | 'admin-gateway'>('profile');
   
   // Profile edit states
   const [name, setName] = useState(user?.name || '');
@@ -41,9 +65,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
-  // Purchased solutions state
-  const [purchasedSolutions, setPurchasedSolutions] = useState<PurchasedSolutionItem[]>([]);
-  const [isLoadingSolutions, setIsLoadingSolutions] = useState(false);
+  // Camera & Photo capture states
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Sync state with user
   useEffect(() => {
@@ -59,92 +90,166 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     }
   }, [user]);
 
-  // Load purchased solutions
+  // Clean up camera stream on unmount or when modal closes
   useEffect(() => {
-    if (isOpen && user) {
-      loadPurchasedSolutions();
-    }
-  }, [isOpen, user]);
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
-  const loadPurchasedSolutions = async () => {
-    setIsLoadingSolutions(true);
+  useEffect(() => {
+    if (!isOpen) {
+      stopCamera();
+    } else if (user) {
+      syncWithServer();
+    }
+  }, [isOpen, user, syncWithServer]);
+
+  // Handle camera activation & video streaming
+  const startCamera = async (targetFacing: 'user' | 'environment' = facingMode) => {
+    setCameraError(null);
+    setIsCameraActive(true);
+
+    // Stop any existing stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
     try {
-      // Fetch from backend API
-      const res = await fetch('/api/user/purchases', {
-        headers: {
-          'Authorization': `Bearer ${token || ''}`,
-          'Content-Type': 'application/json'
-        }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera access API is not supported in this browser environment.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: targetFacing,
+          width: { ideal: 640 },
+          height: { ideal: 640 }
+        },
+        audio: false
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.items)) {
-          setPurchasedSolutions(data.items);
-          setIsLoadingSolutions(false);
-          return;
-        }
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(err => {
+          console.warn('Video play caught:', err);
+        });
       }
-    } catch (e) {
-      console.warn('Backend purchases fetch fallback to local ledger state:', e);
+    } catch (err: any) {
+      console.error('Camera stream error:', err);
+      let msg = 'Failed to access camera. Please verify camera permissions in your browser.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied. Please allow camera access in your browser settings.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = 'No video capture device was detected on your system.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        msg = 'Camera is currently in use by another application or tab.';
+      }
+      setCameraError(msg);
+      setIsCameraActive(false);
     }
+  };
 
-    // Default authentic active purchased items matching user's account
-    const fallbackItems: PurchasedSolutionItem[] = [
-      {
-        id: 'purch-01',
-        lotId: 'S-001',
-        title: 'Zero-Knowledge Rollup Settlement Core v4',
-        category: 'ZK & Cryptography',
-        purchasedAt: '2026-08-18T14:22:00Z',
-        price: 99.00,
-        currency: 'USD',
-        licenseKey: 'SLVX-ZK-9801-4432-EAL6-PROD',
-        licenseTier: 'Unlimited Sovereign Mesh',
-        merkleProof: '0x8f73b198c21a44e99f1092ab5c90823901de47bb3109a87cd92938472910ba12',
-        status: 'ACTIVE',
-        capabilities: ['EAL6+ Verified Enclaves', 'Nitro SGX Hardware Attestation', 'Sub-millisecond Groth16 Prover'],
-        runtimeTarget: 'Node.js 20 ESM / Rust Core'
-      },
-      {
-        id: 'purch-02',
-        lotId: 'S-005',
-        title: 'Autonomous Dark Pool Smart Order Router',
-        category: 'HFT Infrastructure',
-        purchasedAt: '2026-08-19T02:10:00Z',
-        price: 149.00,
-        currency: 'USD',
-        licenseKey: 'SLVX-HFT-7721-9903-LATENCY-PROD',
-        licenseTier: 'Enterprise Multi-Node',
-        merkleProof: '0x22a0918cf1b98402938472910ba12091de47bb3109a87cd98f73b198c21a44e9',
-        status: 'DEPLOYED',
-        capabilities: ['Sub-100ns Order Traversal', 'Dark Pool Liquidity Aggregator', 'Zero-Knowledge Order Masking'],
-        runtimeTarget: 'C++20 / Rust Microservice'
-      },
-      {
-        id: 'purch-03',
-        lotId: 'S-012',
-        title: 'MMTAI 380-Byte Sovereign Perimeter Firewall',
-        category: 'Perimeter Security',
-        purchasedAt: '2026-08-19T06:45:00Z',
-        price: 79.00,
-        currency: 'USD',
-        licenseKey: 'SLVX-MMTAI-380-0012-TRUSTEE-KEY',
-        licenseTier: 'Unlimited Sovereign Mesh',
-        merkleProof: '0xda1578b901cd98f73b198c21a44e922a0918cf1b98402938472910ba12091de4',
-        status: 'ACTIVE',
-        capabilities: ['380-Byte Invariant Header', '5-Hop Mesh Traversal', 'Air-Gapped Key Zeroization'],
-        runtimeTarget: 'Go 1.22 / eBPF Kernel Engine'
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+    setCountdown(null);
+    setIsCapturing(false);
+  };
+
+  const toggleCameraFacing = () => {
+    const nextMode = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
+  };
+
+  // Immediate or countdown snapshot capture
+  const triggerSnapshot = (useCountdown = false) => {
+    if (useCountdown) {
+      setCountdown(3);
+      const interval = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev === null || prev <= 1) {
+            clearInterval(interval);
+            executeCapture();
+            return null;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      executeCapture();
+    }
+  };
+
+  const executeCapture = () => {
+    if (!videoRef.current) return;
+    setIsCapturing(true);
+
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      
+      // Determine square dimensions from video stream
+      const minDim = Math.min(video.videoWidth || 480, video.videoHeight || 480);
+      const targetSize = Math.min(minDim, 400); // 400x400 max for crisp, compact base64 size
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const sx = ((video.videoWidth || 480) - minDim) / 2;
+        const sy = ((video.videoHeight || 480) - minDim) / 2;
+
+        // If user-facing mode, mirror horizontally for natural selfie appearance
+        if (facingMode === 'user') {
+          ctx.translate(targetSize, 0);
+          ctx.scale(-1, 1);
+        }
+
+        ctx.drawImage(video, sx, sy, minDim, minDim, 0, 0, targetSize, targetSize);
+
+        // Convert to high-quality base64 image
+        const base64Data = canvas.toDataURL('image/jpeg', 0.88);
+        persistAvatar(base64Data);
       }
-    ];
+    } catch (err) {
+      console.error('Snapshot capture error:', err);
+    } finally {
+      setIsCapturing(false);
+      stopCamera();
+    }
+  };
 
-    setPurchasedSolutions(fallbackItems);
-    setIsLoadingSolutions(false);
+  // Optional manual file upload to base64 fallback
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      persistAvatar(base64String);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    removeAvatar();
   };
 
   const handleCopyKey = (key: string, id: string) => {
     navigator.clipboard.writeText(key);
     setCopiedKeyId(id);
-    setTimeout(() => setCopiedKeyId(null), 2000);
+    setTimeout(() => setCopiedKeyId(null), 2500);
   };
 
   const handleDownloadSourcePackage = async (item: PurchasedSolutionItem) => {
@@ -271,10 +376,11 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
     setIsSaving(true);
     setSaveSuccess(false);
 
-    const res = await updateProfile({
+    const res = await saveCompleteProfile({
       name,
       company,
       phone,
+      avatarUrl,
       billingAddress: {
         street,
         city,
@@ -302,9 +408,30 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
         {/* Modal Header */}
         <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950/50">
           <div className="flex items-center space-x-4">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-400 to-blue-600 flex items-center justify-center text-slate-950 font-black text-xl shadow-lg shadow-cyan-500/30">
-              {user.name.charAt(0).toUpperCase()}
+            <div className="relative group">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={user.name}
+                  className="w-14 h-14 rounded-2xl object-cover border-2 border-cyan-400/80 shadow-lg shadow-cyan-500/30"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-400 to-blue-600 flex items-center justify-center text-slate-950 font-black text-xl shadow-lg shadow-cyan-500/30">
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <button
+                onClick={() => {
+                  setActiveTab('profile');
+                  startCamera();
+                }}
+                className="absolute -bottom-1 -right-1 p-1.5 rounded-xl bg-slate-900 border border-cyan-400 text-cyan-300 hover:bg-cyan-500 hover:text-black transition-all shadow-md"
+                title="Capture or Update Profile Photo"
+              >
+                <Camera className="w-3.5 h-3.5" />
+              </button>
             </div>
+
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="text-xl font-bold text-white tracking-wide">{user.name}</h2>
@@ -333,7 +460,10 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
               <span className="hidden sm:inline">Sign Out</span>
             </button>
             <button
-              onClick={onClose}
+              onClick={() => {
+                stopCamera();
+                onClose();
+              }}
               className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
             >
               <X className="w-5 h-5" />
@@ -344,7 +474,25 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
         {/* Tab Navigation */}
         <div className="flex items-center border-b border-slate-800 px-6 bg-slate-900/50 overflow-x-auto gap-2">
           <button
-            onClick={() => setActiveTab('solutions')}
+            onClick={() => {
+              stopCamera();
+              setActiveTab('profile');
+            }}
+            className={`flex items-center space-x-2 py-3 px-3 text-xs sm:text-sm font-mono font-bold border-b-2 transition-all whitespace-nowrap ${
+              activeTab === 'profile'
+                ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            <User className="w-4 h-4 text-blue-400" />
+            <span>Profile & Photo</span>
+          </button>
+
+          <button
+            onClick={() => {
+              stopCamera();
+              setActiveTab('solutions');
+            }}
             className={`flex items-center space-x-2 py-3 px-3 text-xs sm:text-sm font-mono font-bold border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'solutions'
                 ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
@@ -356,19 +504,10 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
           </button>
 
           <button
-            onClick={() => setActiveTab('profile')}
-            className={`flex items-center space-x-2 py-3 px-3 text-xs sm:text-sm font-mono font-bold border-b-2 transition-all whitespace-nowrap ${
-              activeTab === 'profile'
-                ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
-                : 'border-transparent text-slate-400 hover:text-white'
-            }`}
-          >
-            <User className="w-4 h-4 text-blue-400" />
-            <span>Profile & Corporate Identity</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('orders')}
+            onClick={() => {
+              stopCamera();
+              setActiveTab('orders');
+            }}
             className={`flex items-center space-x-2 py-3 px-3 text-xs sm:text-sm font-mono font-bold border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'orders'
                 ? 'border-cyan-400 text-cyan-300 bg-cyan-950/20'
@@ -380,7 +519,10 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
           </button>
 
           <button
-            onClick={() => setActiveTab('admin-gateway')}
+            onClick={() => {
+              stopCamera();
+              setActiveTab('admin-gateway');
+            }}
             className={`flex items-center space-x-2 py-3 px-3 text-xs sm:text-sm font-mono font-bold border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'admin-gateway'
                 ? 'border-purple-400 text-purple-300 bg-purple-950/30'
@@ -396,26 +538,382 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
         {/* Modal Body Content */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
           
-          {/* TAB 1: PURCHASED SOLUTIONS */}
+          {/* TAB 1: PROFILE & PHOTO CAPTURE */}
+          {activeTab === 'profile' && (
+            <div className="space-y-6">
+              
+              {/* SECTION: PROFILE PHOTO & CAMERA CAPTURE HUB */}
+              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Camera className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                      Secure Profile Photo (Base64 Encoded)
+                    </h4>
+                  </div>
+                  {avatarUrl && (
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40 flex items-center space-x-1">
+                      <CheckCheck className="w-3 h-3" />
+                      <span>Photo Synchronized</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Camera Viewfinder Box or Photo Preview */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
+                  
+                  {/* Left: Avatar Display / Live Camera Stream */}
+                  <div className="md:col-span-5 flex flex-col items-center justify-center">
+                    {isCameraActive ? (
+                      <div className="relative w-56 h-56 rounded-2xl overflow-hidden bg-black border-2 border-cyan-400 shadow-2xl shadow-cyan-950 flex items-center justify-center">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                        />
+
+                        {/* Viewfinder Grid Overlay */}
+                        <div className="absolute inset-0 border-2 border-cyan-400/40 pointer-events-none rounded-2xl">
+                          <div className="absolute inset-4 border border-dashed border-cyan-300/50 rounded-full animate-pulse" />
+                        </div>
+
+                        {/* Countdown Overlay */}
+                        {countdown !== null && (
+                          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10 animate-scaleUp">
+                            <span className="text-6xl font-black text-cyan-300 font-mono drop-shadow-[0_0_20px_rgba(6,182,212,0.8)]">
+                              {countdown}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Live Recording Indicator */}
+                        <div className="absolute top-2 left-2 flex items-center space-x-1 bg-black/70 px-2 py-0.5 rounded-md border border-cyan-500/40 text-[10px] font-mono text-cyan-300">
+                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                          <span>LIVE FEED</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative group w-44 h-44 rounded-2xl overflow-hidden bg-slate-900 border-2 border-slate-700 hover:border-cyan-400/60 shadow-xl flex items-center justify-center transition-all">
+                        {avatarUrl ? (
+                          <img
+                            src={avatarUrl}
+                            alt="Profile Avatar"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center text-slate-500 space-y-2 p-4 text-center">
+                            <User className="w-12 h-12 text-slate-600" />
+                            <span className="text-xs font-mono">No profile photo</span>
+                          </div>
+                        )}
+
+                        {avatarUrl && (
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => startCamera()}
+                              className="p-2 rounded-xl bg-cyan-500 text-black hover:scale-110 transition-transform shadow-lg"
+                              title="Retake with Camera"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRemovePhoto}
+                              className="p-2 rounded-xl bg-rose-500 text-white hover:scale-110 transition-transform shadow-lg"
+                              title="Remove Photo"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: Camera Action Controls & Telemetry */}
+                  <div className="md:col-span-7 space-y-3">
+                    {cameraError && (
+                      <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 text-xs font-mono flex items-start space-x-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                        <div>{cameraError}</div>
+                      </div>
+                    )}
+
+                    {isCameraActive ? (
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-300 font-mono">
+                          Position your face within the viewfinder circle. Photos are encoded directly to compact base64 strings and stored in your profile state.
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => triggerSnapshot(false)}
+                            disabled={isCapturing}
+                            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-xs font-mono rounded-xl shadow-lg shadow-cyan-500/20 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                          >
+                            <Aperture className="w-4 h-4" />
+                            <span>Capture Photo Now</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => triggerSnapshot(true)}
+                            disabled={isCapturing || countdown !== null}
+                            className="flex items-center space-x-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 font-bold text-xs font-mono rounded-xl border border-slate-700 transition-all"
+                            title="3-Second Shutter Timer"
+                          >
+                            <Clock className="w-4 h-4 text-cyan-400" />
+                            <span>3s Timer</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={toggleCameraFacing}
+                            className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl border border-slate-700 transition-all"
+                            title="Switch Camera (Front / Back)"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={stopCamera}
+                            className="flex items-center space-x-1.5 px-3 py-2.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-mono text-xs rounded-xl border border-rose-900/60 transition-all"
+                          >
+                            <CameraOff className="w-4 h-4" />
+                            <span>Cancel</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-400 font-mono">
+                          Capture a high-definition photo using your web camera or mobile sensor. Your image data is encoded locally as a secure base64 string.
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => startCamera()}
+                            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-xs font-mono rounded-xl shadow-lg shadow-cyan-500/20 transition-all hover:scale-105 active:scale-95"
+                          >
+                            <Camera className="w-4 h-4" />
+                            <span>{avatarUrl ? 'Retake Photo with Camera' : 'Take Profile Photo with Camera'}</span>
+                          </button>
+
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            onChange={handleFileUpload}
+                            accept="image/*"
+                            className="hidden"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="flex items-center space-x-1.5 px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs rounded-xl border border-slate-700 transition-all"
+                          >
+                            <Upload className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Upload Image</span>
+                          </button>
+
+                          {avatarUrl && (
+                            <button
+                              type="button"
+                              onClick={handleRemovePhoto}
+                              className="flex items-center space-x-1.5 px-3 py-2.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-mono text-xs rounded-xl border border-rose-900/40 transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* FORM: CORPORATE IDENTITY FIELDS */}
+              <form onSubmit={handleSaveProfile} className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-bold text-white font-mono flex items-center space-x-2">
+                      <User className="w-4 h-4 text-blue-400" />
+                      <span>Corporate B2B Account Profile</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">Manage legal name, enterprise organization, and billing credentials.</p>
+                  </div>
+                  {saveSuccess && (
+                    <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-mono bg-emerald-950/80 px-2.5 py-1 rounded-lg border border-emerald-500/40">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Profile & Photo Saved!</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-mono text-slate-400 block mb-1">Full Legal Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-slate-400 block mb-1">Company / Organization</label>
+                    <input
+                      type="text"
+                      value={company}
+                      onChange={(e) => setCompany(e.target.value)}
+                      required
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-slate-400 block mb-1">Email Address (Immutable)</label>
+                    <input
+                      type="email"
+                      value={user.email}
+                      disabled
+                      className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-400 cursor-not-allowed font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-slate-400 block mb-1">Telephone / Secure Contact</label>
+                    <input
+                      type="text"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+1 (555) 019-2834"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Billing Address Section */}
+                <div className="pt-4 border-t border-slate-800/80 space-y-3">
+                  <h4 className="text-xs font-bold text-slate-300 font-mono uppercase tracking-wider flex items-center space-x-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Corporate Billing Address</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="text-[11px] font-mono text-slate-400 block mb-1">Street Address</label>
+                      <input
+                        type="text"
+                        value={street}
+                        onChange={(e) => setStreet(e.target.value)}
+                        placeholder="100 Sovereign Way, Suite 400"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-mono text-slate-400 block mb-1">City</label>
+                      <input
+                        type="text"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        placeholder="San Francisco"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-mono text-slate-400 block mb-1">State / Province</label>
+                      <input
+                        type="text"
+                        value={state}
+                        onChange={(e) => setState(e.target.value)}
+                        placeholder="CA"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-mono text-slate-400 block mb-1">Postal / ZIP Code</label>
+                      <input
+                        type="text"
+                        value={postalCode}
+                        onChange={(e) => setPostalCode(e.target.value)}
+                        placeholder="94105"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-mono text-slate-400 block mb-1">Country</label>
+                      <input
+                        type="text"
+                        value={country}
+                        onChange={(e) => setCountry(e.target.value)}
+                        placeholder="United States"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-bold text-xs font-mono rounded-xl shadow-lg shadow-blue-900/40 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSaving ? 'animate-spin' : ''}`} />
+                    <span>{isSaving ? 'Saving Changes...' : 'Save Profile & Settings'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* TAB 2: PURCHASED SOLUTIONS */}
           {activeTab === 'solutions' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
-                  <h3 className="text-base font-bold text-white font-mono flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-cyan-400" />
-                    <span>Unlocked Autonomous Software & Vault Licenses</span>
-                  </h3>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-white font-mono flex items-center space-x-2">
+                      <Sparkles className="w-4 h-4 text-cyan-400" />
+                      <span>Unlocked Autonomous Software & Vault Licenses</span>
+                    </h3>
+                    <span className="hidden sm:inline-flex items-center space-x-1 px-2 py-0.5 text-[10px] font-mono rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                      <HardDrive className="w-3 h-3 text-cyan-400" />
+                      <span>LocalStorage Sync</span>
+                    </span>
+                  </div>
                   <p className="text-xs text-slate-400 mt-0.5">
                     Your authenticated digital licenses, JIT compilable source bundles, and hardware attestation keys.
                   </p>
                 </div>
-                <button
-                  onClick={loadPurchasedSolutions}
-                  className="p-1.5 text-slate-400 hover:text-cyan-300 rounded-lg hover:bg-slate-900 border border-slate-800 transition-colors"
-                  title="Refresh Licenses"
-                >
-                  <RefreshCw className={`w-4 h-4 ${isLoadingSolutions ? 'animate-spin text-cyan-400' : ''}`} />
-                </button>
+                <div className="flex items-center space-x-2">
+                  {lastSyncedAt && (
+                    <span className="text-[10px] font-mono text-slate-400">
+                      Synced {lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                  <button
+                    onClick={syncWithServer}
+                    className="p-1.5 text-slate-400 hover:text-cyan-300 rounded-lg hover:bg-slate-900 border border-slate-800 transition-colors"
+                    title="Refresh & Re-sync Licenses"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin text-cyan-400' : ''}`} />
+                  </button>
+                </div>
               </div>
 
               {purchasedSolutions.length === 0 ? (
@@ -426,6 +924,7 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
                   {onNavigateToCatalog && (
                     <button
                       onClick={() => {
+                        stopCamera();
                         onClose();
                         onNavigateToCatalog();
                       }}
@@ -539,148 +1038,6 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
             </div>
           )}
 
-          {/* TAB 2: PROFILE & IDENTITY */}
-          {activeTab === 'profile' && (
-            <form onSubmit={handleSaveProfile} className="space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div>
-                  <h3 className="text-base font-bold text-white font-mono flex items-center space-x-2">
-                    <User className="w-4 h-4 text-blue-400" />
-                    <span>Corporate B2B Account Profile</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Manage identity, phone, enterprise organization, and billing address.</p>
-                </div>
-                {saveSuccess && (
-                  <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-mono bg-emerald-950/80 px-2.5 py-1 rounded-lg border border-emerald-500/40">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Profile Updated!</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-mono text-slate-400 block mb-1">Full Legal Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-mono text-slate-400 block mb-1">Company / Organization</label>
-                  <input
-                    type="text"
-                    value={company}
-                    onChange={(e) => setCompany(e.target.value)}
-                    required
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-mono text-slate-400 block mb-1">Email Address (Immutable)</label>
-                  <input
-                    type="email"
-                    value={user.email}
-                    disabled
-                    className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-400 cursor-not-allowed"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-mono text-slate-400 block mb-1">Telephone / Secure Contact</label>
-                  <input
-                    type="text"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+1 (555) 019-2834"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:border-cyan-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Billing Address Section */}
-              <div className="pt-4 border-t border-slate-800/80 space-y-3">
-                <h4 className="text-xs font-bold text-slate-300 font-mono uppercase tracking-wider flex items-center space-x-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Corporate Billing Address</span>
-                </h4>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className="text-[11px] font-mono text-slate-400 block mb-1">Street Address</label>
-                    <input
-                      type="text"
-                      value={street}
-                      onChange={(e) => setStreet(e.target.value)}
-                      placeholder="100 Sovereign Way, Suite 400"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 block mb-1">City</label>
-                    <input
-                      type="text"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      placeholder="San Francisco"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 block mb-1">State / Province</label>
-                    <input
-                      type="text"
-                      value={state}
-                      onChange={(e) => setState(e.target.value)}
-                      placeholder="CA"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 block mb-1">Postal / ZIP Code</label>
-                    <input
-                      type="text"
-                      value={postalCode}
-                      onChange={(e) => setPostalCode(e.target.value)}
-                      placeholder="94105"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-mono text-slate-400 block mb-1">Country</label>
-                    <input
-                      type="text"
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                      placeholder="United States"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-3 flex justify-end">
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-bold text-xs font-mono rounded-xl shadow-lg shadow-blue-900/40 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSaving ? 'animate-spin' : ''}`} />
-                  <span>{isSaving ? 'Saving Changes...' : 'Save Profile Changes'}</span>
-                </button>
-              </div>
-            </form>
-          )}
-
           {/* TAB 3: ORDERS & RECEIPTS */}
           {activeTab === 'orders' && (
             <div className="space-y-4">
@@ -790,6 +1147,7 @@ Generated and attested by **SolveX Sovereign Vault** (uarefake.com / uarefake.sp
               <div className="flex items-center justify-end pt-2">
                 <button
                   onClick={() => {
+                    stopCamera();
                     onClose();
                     if (onNavigateToSpaceAdmin) {
                       onNavigateToSpaceAdmin();

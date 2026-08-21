@@ -166,16 +166,30 @@ export const Header: React.FC<HeaderProps> = ({
             {/* User Account / Auth Trigger */}
             {isAuthenticated && user ? (
               <div className="flex items-center space-x-1.5 bg-slate-900 border border-cyan-500/40 px-2.5 py-1.5 rounded-xl text-xs font-mono shadow-inner">
-                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-black font-extrabold text-[10px]">
-                  {user.name.charAt(0).toUpperCase()}
-                </div>
-                <div className="hidden lg:flex flex-col text-left">
-                  <span className="text-[11px] font-bold text-white leading-tight truncate max-w-[90px]">{user.name.split(' ')[0]}</span>
-                  <span className="text-[9px] text-cyan-400/80 leading-tight truncate max-w-[90px]">{user.role}</span>
-                </div>
+                <button
+                  onClick={onOpenProfileModal}
+                  className="flex items-center space-x-2 text-left hover:opacity-80 transition-opacity"
+                  title="Open User Profile & Purchased Solutions Vault"
+                >
+                  {user.avatarUrl ? (
+                    <img
+                      src={user.avatarUrl}
+                      alt={user.name}
+                      className="w-5 h-5 rounded-full object-cover border border-cyan-400/80"
+                    />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-black font-extrabold text-[10px]">
+                      {user.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="hidden lg:flex flex-col text-left">
+                    <span className="text-[11px] font-bold text-white leading-tight truncate max-w-[90px]">{user.name.split(' ')[0]}</span>
+                    <span className="text-[9px] text-cyan-400/80 leading-tight truncate max-w-[90px]">{user.role}</span>
+                  </div>
+                </button>
                 <button
                   onClick={logout}
-                  className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition-colors"
+                  className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition-colors ml-1"
                   title="Sign Out"
                 >
                   <LogOut className="w-3.5 h-3.5" />

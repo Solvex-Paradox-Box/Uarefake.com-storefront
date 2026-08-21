@@ -150,6 +150,10 @@ export class NeonStatePersistence {
     return newUser;
   }
 
+  public static async findOrCreateUser(email: string): Promise<NeonUser> {
+    return this.upsertUser(email);
+  }
+
   public static async recordPurchase(
     userId: string,
     lotId: string,

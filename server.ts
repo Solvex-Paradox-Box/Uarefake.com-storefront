@@ -75,7 +75,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Initialize Neon PostgreSQL Database (if DATABASE_URL or NEON_DATABASE_URL is provided)
   initNeonDatabase(solutionsStore, ordersStore, shipmentsStore).catch(err => {
@@ -417,9 +418,9 @@ async function startServer() {
 
         // Sync with Neon Relational DB
         if (isNeonConnected()) {
-          const u = NeonStatePersistence.findOrCreateUser(customer.email);
-          NeonStatePersistence.recordPurchase(u.id, itm.solutionId || itm.id || 'LOT-01', Number(itm.price) || 0, 'USD');
-          NeonStatePersistence.unlockLot(u.id, itm.solutionId || itm.id || 'LOT-01');
+          const u = await NeonStatePersistence.findOrCreateUser(customer.email);
+          await NeonStatePersistence.recordPurchase(u.id, itm.solutionId || itm.id || 'LOT-01', Number(itm.price) || 0, 'USD');
+          await NeonStatePersistence.unlockLot(u.id, itm.solutionId || itm.id || 'LOT-01');
         }
       }
 

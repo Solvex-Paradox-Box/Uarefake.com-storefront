@@ -69,8 +69,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (res.ok) {
           const data: AuthResponse = await res.json();
           if (data.success && data.user) {
-            setUser(data.user);
-            localStorage.setItem('solvex_user_session', JSON.stringify(data.user));
+            // Check if there is a local base64 avatar saved in localStorage
+            const userKey = data.user.id || data.user.email.toLowerCase().replace(/[^a-z0-9]/g, '_');
+            const storedAvatar = localStorage.getItem(`solvex_profile_avatar_${userKey}`);
+            
+            const mergedUser: UserAccount = {
+              ...data.user,
+              avatarUrl: data.user.avatarUrl || storedAvatar || user?.avatarUrl || ''
+            };
+
+            setUser(mergedUser);
+            localStorage.setItem('solvex_user_session', JSON.stringify(mergedUser));
           } else {
             // Token expired or invalid
             logout();
