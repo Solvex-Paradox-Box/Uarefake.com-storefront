@@ -1,3 +1,7 @@
+⚠️ Temporary Public Status
+This repository is currently public ONLY for cross-system validation, code scanning, and multi-platform testing.
+It will be made private once the architecture is finalized.
+
 # Solvex Paradox Box Autonomous Marketplace & B2B Solutions
 
 Official Repository: [https://github.com/Solvex-Paradox-Box/Solvex-Paradox-Marketplace-B2B-Solutions#solvex-paradox-marketplace--b2b-solutions](https://github.com/Solvex-Paradox-Box/Solvex-Paradox-Marketplace-B2B-Solutions#solvex-paradox-marketplace--b2b-solutions)
